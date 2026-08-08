@@ -10,17 +10,6 @@ const projectSchema = new mongoose.Schema(
       trim: true,
     },
 
-    status: {
-      type: String,
-      enum: ["draft", "published", "archived"],
-      default: "draft",
-    },
-
-    featured: {
-      type: Boolean,
-      default: false,
-    },
-
     hero: {
       title: {
         type: String,
