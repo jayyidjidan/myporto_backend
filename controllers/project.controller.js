@@ -2,8 +2,7 @@ import cloudinary from "../config/cloudinary.js";
 import Project from "../models/Project.js";
 
 /**
- * Helper: get relative URL for an uploaded file.
- * Returns null if no file was uploaded for that field.
+ * Upload a file buffer to Cloudinary.
  */
 const uploadToCloudinary = (file) => {
   return new Promise((resolve, reject) => {
@@ -27,60 +26,136 @@ const uploadToCloudinary = (file) => {
 
 /**
  * Build the nested MongoDB document from the flat multipart form data.
- * The frontend sends all non-file fields as a JSON string in `req.body.projectData`,
- * and actual files as separate multipart fields.
+ *
+ * The frontend sends:
+ * - All non-file fields as JSON string in req.body.projectData
+ * - Actual image files through multipart fields
  */
 const buildProjectData = async (body, files) => {
   let data;
+
   try {
     data = JSON.parse(body.projectData);
   } catch {
     data = { ...body };
   }
 
-  // ── Hero image ──────────────────────────────────────────────
-  const coverUrl = getFileUrl(files, "coverImage");
-  if (coverUrl && data.hero) data.hero.coverImage = coverUrl;
+  // ============================================================
+  // HERO IMAGE
+  // ============================================================
 
-  // ── Problem images ───────────────────────────────────────────
+  if (files?.coverImage?.[0]) {
+    const coverUrl = await uploadToCloudinary(
+      files.coverImage[0]
+    );
+
+    if (data.hero) {
+      data.hero.coverImage = coverUrl;
+    }
+  }
+
+  // ============================================================
+  // PROBLEM IMAGES
+  // ============================================================
+
   if (data.problem) {
-    const existingImgs = data.problem.images || [];
-    const img1 = getFileUrl(files, "image1") ?? existingImgs[0] ?? null;
-    const img2 = getFileUrl(files, "image2") ?? existingImgs[1] ?? null;
-    data.problem.images = [img1, img2].filter(Boolean);
+    const existingImages = data.problem.images || [];
+
+    const image1 = files?.image1?.[0]
+      ? await uploadToCloudinary(files.image1[0])
+      : existingImages[0] || null;
+
+    const image2 = files?.image2?.[0]
+      ? await uploadToCloudinary(files.image2[0])
+      : existingImages[1] || null;
+
+    data.problem.images = [
+      image1,
+      image2,
+    ].filter(Boolean);
   }
 
-  // ── Process images ───────────────────────────────────────────
+  // ============================================================
+  // PROCESS IMAGES
+  // ============================================================
+
   if (data.processes) {
-    data.processes = data.processes.map((p, i) => {
-      const newImg = getFileUrl(files, `process${i + 1}image`);
-      return {
-        ...p,
-        images: newImg ? [newImg] : (p.images || []),
-      };
-    });
+    data.processes = await Promise.all(
+      data.processes.map(async (process, index) => {
+        const fieldName = `process${index + 1}image`;
+
+        const file = files?.[fieldName]?.[0];
+
+        if (file) {
+          const imageUrl = await uploadToCloudinary(file);
+
+          return {
+            ...process,
+            images: [imageUrl],
+          };
+        }
+
+        return {
+          ...process,
+          images: process.images || [],
+        };
+      })
+    );
   }
 
-  // ── Result images ────────────────────────────────────────────
+  // ============================================================
+  // RESULT IMAGES
+  // ============================================================
+
   if (data.results) {
-    data.results = data.results.map((r, i) => {
-      const newImg = getFileUrl(files, `result${i + 1}image`);
-      return {
-        ...r,
-        images: newImg ? [newImg] : (r.images || []),
-      };
-    });
+    data.results = await Promise.all(
+      data.results.map(async (result, index) => {
+        const fieldName = `result${index + 1}image`;
+
+        const file = files?.[fieldName]?.[0];
+
+        if (file) {
+          const imageUrl = await uploadToCloudinary(file);
+
+          return {
+            ...result,
+            images: [imageUrl],
+          };
+        }
+
+        return {
+          ...result,
+          images: result.images || [],
+        };
+      })
+    );
   }
 
-  // ── Gallery images ───────────────────────────────────────────
-  const galleryUrls = [];
-  for (let i = 1; i <= 9; i++) {
-    const url = getFileUrl(files, `gallery${i}`);
-    if (url) galleryUrls.push(url);
-  }
-  if (galleryUrls.length > 0) {
+  // ============================================================
+  // GALLERY IMAGES
+  // ============================================================
+
+  if (data.gallery) {
+    const existingGallery = data.gallery || [];
+
+    const galleryUrls = [];
+
+    for (let i = 1; i <= 9; i++) {
+      const fieldName = `gallery${i}`;
+
+      const file = files?.[fieldName]?.[0];
+
+      if (file) {
+        const imageUrl = await uploadToCloudinary(file);
+
+        galleryUrls.push(imageUrl);
+      } else if (existingGallery[i - 1]) {
+        galleryUrls.push(existingGallery[i - 1]);
+      }
+    }
+
     data.gallery = galleryUrls;
-  } else if (!data.gallery) {
+  } else {
     data.gallery = [];
   }
 
@@ -89,6 +164,7 @@ const buildProjectData = async (body, files) => {
 
 /**
  * Create a new project
+ *
  * POST /api/projects
  */
 export const createProject = async (req, res) => {
@@ -106,7 +182,7 @@ export const createProject = async (req, res) => {
       data: project,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Create Project Error:", error);
 
     res.status(500).json({
       success: false,
@@ -117,11 +193,14 @@ export const createProject = async (req, res) => {
 
 /**
  * Get all projects
+ *
  * GET /api/projects
  */
 export const getProjects = async (req, res) => {
   try {
-    const projects = await Project.find().sort({ createdAt: -1 });
+    const projects = await Project.find().sort({
+      createdAt: -1,
+    });
 
     res.status(200).json({
       success: true,
@@ -129,30 +208,50 @@ export const getProjects = async (req, res) => {
       data: projects,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Get Projects Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 /**
  * Get project by slug
+ *
  * GET /api/projects/:slug
  */
 export const getProjectBySlug = async (req, res) => {
   try {
-    const project = await Project.findOne({ slug: req.params.slug });
+    const project = await Project.findOne({
+      slug: req.params.slug,
+    });
 
     if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found." });
+      return res.status(404).json({
+        success: false,
+        message: "Project not found.",
+      });
     }
 
-    res.status(200).json({ success: true, data: project });
+    res.status(200).json({
+      success: true,
+      data: project,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Get Project Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 /**
  * Update project
+ *
  * PUT /api/projects/:id
  */
 export const updateProject = async (req, res) => {
@@ -184,7 +283,7 @@ export const updateProject = async (req, res) => {
       data: project,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Update Project Error:", error);
 
     res.status(500).json({
       success: false,
@@ -195,18 +294,32 @@ export const updateProject = async (req, res) => {
 
 /**
  * Delete project
+ *
  * DELETE /api/projects/:id
  */
 export const deleteProject = async (req, res) => {
   try {
-    const project = await Project.findByIdAndDelete(req.params.id);
+    const project = await Project.findByIdAndDelete(
+      req.params.id
+    );
 
     if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found." });
+      return res.status(404).json({
+        success: false,
+        message: "Project not found.",
+      });
     }
 
-    res.status(200).json({ success: true, message: "Project deleted successfully." });
+    res.status(200).json({
+      success: true,
+      message: "Project deleted successfully.",
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error("Delete Project Error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
