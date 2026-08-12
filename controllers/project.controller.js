@@ -5,6 +5,12 @@ import Project from "../models/Project.js";
  * Upload a file buffer to Cloudinary.
  */
 const uploadToCloudinary = (file) => {
+  console.log({
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKeyExists: !!process.env.CLOUDINARY_API_KEY,
+    apiSecretExists: !!process.env.CLOUDINARY_API_SECRET,
+  });
+
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
