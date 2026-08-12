@@ -1,14 +1,28 @@
+import cloudinary from "../config/cloudinary.js";
 import Project from "../models/Project.js";
 
 /**
  * Helper: get relative URL for an uploaded file.
  * Returns null if no file was uploaded for that field.
  */
-const getFileUrl = (files, fieldName) => {
-  if (files && files[fieldName] && files[fieldName][0]) {
-    return `/uploads/${files[fieldName][0].filename}`;
-  }
-  return null;
+const uploadToCloudinary = (file) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "jayyid-portfolio",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+
+    stream.end(file.buffer);
+  });
 };
 
 /**
@@ -16,7 +30,7 @@ const getFileUrl = (files, fieldName) => {
  * The frontend sends all non-file fields as a JSON string in `req.body.projectData`,
  * and actual files as separate multipart fields.
  */
-const buildProjectData = (body, files) => {
+const buildProjectData = async (body, files) => {
   let data;
   try {
     data = JSON.parse(body.projectData);
@@ -79,7 +93,11 @@ const buildProjectData = (body, files) => {
  */
 export const createProject = async (req, res) => {
   try {
-    const projectData = buildProjectData(req.body, req.files || {});
+    const projectData = await buildProjectData(
+      req.body,
+      req.files || {}
+    );
+
     const project = await Project.create(projectData);
 
     res.status(201).json({
@@ -88,7 +106,12 @@ export const createProject = async (req, res) => {
       data: project,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
@@ -134,15 +157,25 @@ export const getProjectBySlug = async (req, res) => {
  */
 export const updateProject = async (req, res) => {
   try {
-    const projectData = buildProjectData(req.body, req.files || {});
+    const projectData = await buildProjectData(
+      req.body,
+      req.files || {}
+    );
 
-    const project = await Project.findByIdAndUpdate(req.params.id, projectData, {
-      new: true,
-      runValidators: true,
-    });
+    const project = await Project.findByIdAndUpdate(
+      req.params.id,
+      projectData,
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     if (!project) {
-      return res.status(404).json({ success: false, message: "Project not found." });
+      return res.status(404).json({
+        success: false,
+        message: "Project not found.",
+      });
     }
 
     res.status(200).json({
@@ -151,7 +184,12 @@ export const updateProject = async (req, res) => {
       data: project,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error(error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
