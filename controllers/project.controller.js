@@ -5,12 +5,6 @@ import Project from "../models/Project.js";
  * Upload a file buffer to Cloudinary.
  */
 const uploadToCloudinary = (file) => {
-  console.log({
-    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-    apiKeyExists: !!process.env.CLOUDINARY_API_KEY,
-    apiSecretExists: !!process.env.CLOUDINARY_API_SECRET,
-  });
-
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
@@ -198,15 +192,27 @@ export const createProject = async (req, res) => {
 };
 
 /**
- * Get all projects
+ * Get all projects (lightweight list for the project cards)
  *
  * GET /api/projects
+ *
+ * Only returns the fields ProjectCard needs. The full document
+ * (problem, processes, results, gallery) is fetched by
+ * GET /api/projects/:slug on the detail page.
  */
 export const getProjects = async (req, res) => {
   try {
-    const projects = await Project.find().sort({
-      createdAt: -1,
-    });
+    const projects = await Project.find()
+      .select("slug hero.title hero.coverImage overview.categories createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Browser/CDN may reuse this response for 60s and serve a stale
+    // copy for up to 5 more minutes while refreshing in the background.
+    res.set(
+      "Cache-Control",
+      "public, max-age=60, stale-while-revalidate=300"
+    );
 
     res.status(200).json({
       success: true,
