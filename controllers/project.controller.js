@@ -1,35 +1,33 @@
 import cloudinary from "../config/cloudinary.js";
 import Project from "../models/Project.js";
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 /**
  * Upload a file buffer to Cloudinary.
  */
-const uploadToCloudinary = (file) => {
-  return new Promise((resolve, reject) => {
+const uploadToCloudinary = (file) =>
+  new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      {
-        folder: "jayyid-portfolio",
-        resource_type: "image",
-      },
+      { folder: "jayyid-portfolio", resource_type: "image" },
       (error, result) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve(result.secure_url);
-        }
+        if (error) reject(error);
+        else resolve(result.secure_url);
       }
     );
-
     stream.end(file.buffer);
   });
-};
 
 /**
- * Build the nested MongoDB document from the flat multipart form data.
+ * Build the project document from multipart form data.
  *
  * The frontend sends:
- * - All non-file fields as JSON string in req.body.projectData
- * - Actual image files through multipart fields
+ *   - req.body.projectData   : JSON string with all non-file fields
+ *   - req.files.coverImage   : optional cover image
+ *   - req.files[`s${sIdx}_b${bIdx}_img${iIdx}`] : block image files
+ *       where sIdx = section index (0-based)
+ *             bIdx = block index (0-based)
+ *             iIdx = image index within block (0-based, for carousel/grid)
  */
 const buildProjectData = async (body, files) => {
   let data;
@@ -40,140 +38,59 @@ const buildProjectData = async (body, files) => {
     data = { ...body };
   }
 
-  // ============================================================
-  // HERO IMAGE
-  // ============================================================
-
+  // ── Cover image ─────────────────────────────────────────────────────────────
   if (files?.coverImage?.[0]) {
-    const coverUrl = await uploadToCloudinary(
-      files.coverImage[0]
-    );
-
-    if (data.hero) {
-      data.hero.coverImage = coverUrl;
-    }
+    data.coverImage = await uploadToCloudinary(files.coverImage[0]);
   }
 
-  // ============================================================
-  // PROBLEM IMAGES
-  // ============================================================
-
-  if (data.problem) {
-    const existingImages = data.problem.images || [];
-
-    const image1 = files?.image1?.[0]
-      ? await uploadToCloudinary(files.image1[0])
-      : existingImages[0] || null;
-
-    const image2 = files?.image2?.[0]
-      ? await uploadToCloudinary(files.image2[0])
-      : existingImages[1] || null;
-
-    data.problem.images = [
-      image1,
-      image2,
-    ].filter(Boolean);
-  }
-
-  // ============================================================
-  // PROCESS IMAGES
-  // ============================================================
-
-  if (data.processes) {
-    data.processes = await Promise.all(
-      data.processes.map(async (process, index) => {
-        const fieldName = `process${index + 1}image`;
-
-        const file = files?.[fieldName]?.[0];
-
-        if (file) {
-          const imageUrl = await uploadToCloudinary(file);
-
-          return {
-            ...process,
-            images: [imageUrl],
-          };
-        }
-
-        return {
-          ...process,
-          images: process.images || [],
-        };
+  // ── Section block images ─────────────────────────────────────────────────────
+  if (Array.isArray(data.sections)) {
+    data.sections = await Promise.all(
+      data.sections.map(async (section, sIdx) => {
+        const blocks = await Promise.all(
+          (section.blocks || []).map(async (block, bIdx) => {
+            if (block.type === "image") {
+              // Single image block
+              const key = `s${sIdx}_b${bIdx}_img0`;
+              if (files?.[key]?.[0]) {
+                block.url = await uploadToCloudinary(files[key][0]);
+              }
+            } else if (block.type === "carousel" || block.type === "grid") {
+              // Multi-image blocks
+              const updatedImages = await Promise.all(
+                (block.images || []).map(async (img, iIdx) => {
+                  const key = `s${sIdx}_b${bIdx}_img${iIdx}`;
+                  if (files?.[key]?.[0]) {
+                    return {
+                      ...img,
+                      url: await uploadToCloudinary(files[key][0]),
+                    };
+                  }
+                  return img;
+                })
+              );
+              block.images = updatedImages;
+            }
+            return block;
+          })
+        );
+        return { ...section, blocks };
       })
     );
-  }
-
-  // ============================================================
-  // RESULT IMAGES
-  // ============================================================
-
-  if (data.results) {
-    data.results = await Promise.all(
-      data.results.map(async (result, index) => {
-        const fieldName = `result${index + 1}image`;
-
-        const file = files?.[fieldName]?.[0];
-
-        if (file) {
-          const imageUrl = await uploadToCloudinary(file);
-
-          return {
-            ...result,
-            images: [imageUrl],
-          };
-        }
-
-        return {
-          ...result,
-          images: result.images || [],
-        };
-      })
-    );
-  }
-
-  // ============================================================
-  // GALLERY IMAGES
-  // ============================================================
-
-  if (data.gallery) {
-    const existingGallery = data.gallery || [];
-
-    const galleryUrls = [];
-
-    for (let i = 1; i <= 9; i++) {
-      const fieldName = `gallery${i}`;
-
-      const file = files?.[fieldName]?.[0];
-
-      if (file) {
-        const imageUrl = await uploadToCloudinary(file);
-
-        galleryUrls.push(imageUrl);
-      } else if (existingGallery[i - 1]) {
-        galleryUrls.push(existingGallery[i - 1]);
-      }
-    }
-
-    data.gallery = galleryUrls;
-  } else {
-    data.gallery = [];
   }
 
   return data;
 };
 
+// ── Controller actions ────────────────────────────────────────────────────────
+
 /**
  * Create a new project
- *
  * POST /api/projects
  */
 export const createProject = async (req, res) => {
   try {
-    const projectData = await buildProjectData(
-      req.body,
-      req.files || {}
-    );
-
+    const projectData = await buildProjectData(req.body, req.files || {});
     const project = await Project.create(projectData);
 
     res.status(201).json({
@@ -183,32 +100,21 @@ export const createProject = async (req, res) => {
     });
   } catch (error) {
     console.error("Create Project Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
- * Get all projects (lightweight list for the project cards)
- *
+ * Get all projects (lightweight list for project cards)
  * GET /api/projects
- *
- * Only returns the fields ProjectCard needs. The full document
- * (problem, processes, results, gallery) is fetched by
- * GET /api/projects/:slug on the detail page.
  */
 export const getProjects = async (req, res) => {
   try {
     const projects = await Project.find()
-      .select("slug hero.title hero.coverImage overview.categories createdAt")
+      .select("slug title category scope duration coverImage createdAt")
       .sort({ createdAt: -1 })
       .lean();
 
-    // Browser/CDN may reuse this response for 60s and serve a stale
-    // copy for up to 5 more minutes while refreshing in the background.
     res.set(
       "Cache-Control",
       "public, max-age=60, stale-while-revalidate=300"
@@ -221,72 +127,49 @@ export const getProjects = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Projects Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
  * Get project by slug
- *
  * GET /api/projects/:slug
  */
 export const getProjectBySlug = async (req, res) => {
   try {
-    const project = await Project.findOne({
-      slug: req.params.slug,
-    });
+    const project = await Project.findOne({ slug: req.params.slug });
 
     if (!project) {
-      return res.status(404).json({
-        success: false,
-        message: "Project not found.",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Project not found." });
     }
 
-    res.status(200).json({
-      success: true,
-      data: project,
-    });
+    res.status(200).json({ success: true, data: project });
   } catch (error) {
     console.error("Get Project Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
  * Update project
- *
  * PUT /api/projects/:id
  */
 export const updateProject = async (req, res) => {
   try {
-    const projectData = await buildProjectData(
-      req.body,
-      req.files || {}
-    );
+    const projectData = await buildProjectData(req.body, req.files || {});
 
     const project = await Project.findByIdAndUpdate(
       req.params.id,
       projectData,
-      {
-        new: true,
-        runValidators: true,
-      }
+      { new: true, runValidators: true }
     );
 
     if (!project) {
-      return res.status(404).json({
-        success: false,
-        message: "Project not found.",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Project not found." });
     }
 
     res.status(200).json({
@@ -296,30 +179,22 @@ export const updateProject = async (req, res) => {
     });
   } catch (error) {
     console.error("Update Project Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
  * Delete project
- *
  * DELETE /api/projects/:id
  */
 export const deleteProject = async (req, res) => {
   try {
-    const project = await Project.findByIdAndDelete(
-      req.params.id
-    );
+    const project = await Project.findByIdAndDelete(req.params.id);
 
     if (!project) {
-      return res.status(404).json({
-        success: false,
-        message: "Project not found.",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Project not found." });
     }
 
     res.status(200).json({
@@ -328,10 +203,6 @@ export const deleteProject = async (req, res) => {
     });
   } catch (error) {
     console.error("Delete Project Error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
