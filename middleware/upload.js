@@ -1,33 +1,29 @@
 import multer from "multer";
 
-const storage = multer.memoryStorage();
-
 const upload = multer({
-  storage,
-});
+  storage: multer.memoryStorage(), // controller memakai file.buffer
+  limits: { fileSize: 8 * 1024 * 1024, files: 60 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Hanya file gambar yang diperbolehkan."));
+  },
+}).any(); // terima nama field dinamis: coverImage, s0_b0_img0, dst.
 
-export const uploadFields = upload.fields([
-  { name: "coverImage", maxCount: 1 },
+export const uploadFields = (req, res, next) => {
+  upload(req, res, (err) => {
+    if (err) {
+      // error multer dijawab JSON, bukan HTML
+      return res.status(400).json({ success: false, message: err.message });
+    }
 
-  { name: "image1", maxCount: 1 },
-  { name: "image2", maxCount: 1 },
+    // .any() menghasilkan array; ubah ke { fieldname: [file, ...] }
+    // supaya cocok dengan cara controller membaca req.files
+    const grouped = {};
+    for (const file of req.files || []) {
+      (grouped[file.fieldname] ||= []).push(file);
+    }
+    req.files = grouped;
 
-  { name: "process1image", maxCount: 1 },
-  { name: "process2image", maxCount: 1 },
-  { name: "process3image", maxCount: 1 },
-  { name: "process4image", maxCount: 1 },
-
-  { name: "result1image", maxCount: 1 },
-  { name: "result2image", maxCount: 1 },
-  { name: "result3image", maxCount: 1 },
-
-  { name: "gallery1", maxCount: 1 },
-  { name: "gallery2", maxCount: 1 },
-  { name: "gallery3", maxCount: 1 },
-  { name: "gallery4", maxCount: 1 },
-  { name: "gallery5", maxCount: 1 },
-  { name: "gallery6", maxCount: 1 },
-  { name: "gallery7", maxCount: 1 },
-  { name: "gallery8", maxCount: 1 },
-  { name: "gallery9", maxCount: 1 },
-]);
+    next();
+  });
+};
